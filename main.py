@@ -5,6 +5,7 @@ import requests
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# Constants for search URLs
 PRAKTIS_SEARCH_URL = "https://praktis.bg/catalogsearch/result/?q={}"
 PRAKTIKER_SEARCH_URL = "https://praktiker.bg/search/{}"
 
@@ -17,17 +18,19 @@ USER_AGENTS = [
 ]
 session.headers.update({"Accept-Language": "en-US,en;q=0.9"})
 
+
 def get_soup(url):
+    """Fetch and parse the webpage content using BeautifulSoup."""
     for attempt in range(3):  # Retry up to 3 times
         try:
             session.headers.update({"User-Agent": random.choice(USER_AGENTS)})
             response = session.get(url, timeout=10)
             response.raise_for_status()
             return BeautifulSoup(response.content, 'html.parser')
-        except requests.RequestException as e:
-            print(f"Attempt {attempt + 1}: Failed to fetch {url}: {e}")
+        except requests.RequestException:
             time.sleep(2 ** attempt + random.uniform(0.5, 1.5))  # Exponential backoff
     return None
+
 
 def fetch_product_data_praktis(code):
     url = PRAKTIS_SEARCH_URL.format(code)
@@ -42,11 +45,13 @@ def fetch_product_data_praktis(code):
     return {
         "code": code,
         "name": name.text.strip() if name else "N/A",
-        "regular_price": regular_price.text.strip().replace("лв.", "").strip() if regular_price else "N/A",
-        "promo_price": promo_price.text.strip().replace("лв.", "").strip() if promo_price else None,
+        "regular_price": regular_price.text.strip().replace("\u043b\u0432.", "").strip() if regular_price else "N/A",
+        "promo_price": promo_price.text.strip().replace("\u043b\u0432.", "").strip() if promo_price else None,
     }
 
+
 def fetch_product_data_praktiker(code):
+    code = str(code).strip()  # Ensure the code is a string and strip leading/trailing whitespace
     url = PRAKTIKER_SEARCH_URL.format(code)
     soup = get_soup(url)
     if not soup:
@@ -88,6 +93,7 @@ def fetch_product_data_praktiker(code):
         "promo_price": promo_price,
     }
 
+
 def process_excel_and_fetch_data(input_file, output_file):
     try:
         df = pd.read_excel(input_file, engine="odf")
@@ -100,42 +106,36 @@ def process_excel_and_fetch_data(input_file, output_file):
         praktis_data = []
         praktiker_data = []
 
+        # Fetch Praktis data
         with ThreadPoolExecutor(max_threads) as executor:
             futures_praktis = {executor.submit(fetch_product_data_praktis, code): code for code in praktis_codes}
             for future in as_completed(futures_praktis):
                 praktis_data.append(future.result())
-                time.sleep(random.uniform(*delay_range))  # Random delay
+                time.sleep(random.uniform(*delay_range))
 
+        # Fetch Praktiker data
+        with ThreadPoolExecutor(max_threads) as executor:
             futures_praktiker = {executor.submit(fetch_product_data_praktiker, code): code for code in praktiker_codes}
             for future in as_completed(futures_praktiker):
                 praktiker_data.append(future.result())
-                time.sleep(random.uniform(*delay_range))  # Random delay
+                time.sleep(random.uniform(*delay_range))
 
-        with open(output_file, "w", encoding="utf-8") as file:
-            file.write("Product Details\n")
-            file.write("=" * 50 + "\n")
-
-            for p_data, k_data in zip(praktis_data, praktiker_data):
-                file.write(f"Praktis:\n")
-                file.write(f"Code: {p_data['code']}, Name: {p_data['name']}, ")
-                file.write(f"Regular Price: {p_data['regular_price']} лв.")
-                if p_data["promo_price"]:
-                    file.write(f", Promo Price: {p_data['promo_price']} лв.")
-                file.write("\n")
-
-                file.write(f"Praktiker:\n")
-                file.write(f"Code: {k_data['code']}, Name: {k_data['name']}, ")
-                file.write(f"Regular Price: {k_data['regular_price']} лв.")
-                if k_data["promo_price"]:
-                    file.write(f", Promo Price: {k_data['promo_price']} лв.")
-                file.write("\n")
-                file.write("=" * 50 + "\n")
-
+        # Combine and export to Excel
+        output_df = pd.DataFrame({
+            "ID": [item["code"] for item in praktis_data],
+            "Name": [item["name"] for item in praktis_data],
+            "Praktis Regular": [item["regular_price"] for item in praktis_data],
+            "Praktiker Regular": [item["regular_price"] for item in praktiker_data],
+            "Praktis Promo": [item["promo_price"] for item in praktis_data],
+            "Praktiker Promo": [item["promo_price"] for item in praktiker_data],
+        })
+        output_df.to_excel(output_file, index=False)
         print(f"Data exported successfully to {output_file}")
     except Exception as e:
         print(f"An error occurred: {e}")
 
+
 if __name__ == "__main__":
     input_excel = r"C:\Users\МЕГАДОМ\Desktop\products_list.ods"
-    output_txt = "product_details.txt"
-    process_excel_and_fetch_data(input_excel, output_txt)
+    output_excel = r"C:\Users\МЕГАДОМ\Desktop\product_details_1.xlsx"
+    process_excel_and_fetch_data(input_excel, output_excel)
