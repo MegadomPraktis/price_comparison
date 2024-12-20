@@ -4,6 +4,10 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
+from openpyxl.styles import Alignment
+from datetime import datetime
 
 # Constants for search URLs
 PRAKTIS_SEARCH_URL = "https://praktis.bg/catalogsearch/result/?q={}"
@@ -18,21 +22,19 @@ USER_AGENTS = [
 ]
 session.headers.update({"Accept-Language": "en-US,en;q=0.9"})
 
-
 def get_soup(url):
-    """Fetch and parse the webpage content using BeautifulSoup."""
     for attempt in range(3):  # Retry up to 3 times
         try:
             session.headers.update({"User-Agent": random.choice(USER_AGENTS)})
-            response = session.get(url, timeout=10)
+            response = session.get(url, timeout=15)
             response.raise_for_status()
             return BeautifulSoup(response.content, 'html.parser')
         except requests.RequestException:
             time.sleep(2 ** attempt + random.uniform(0.5, 1.5))  # Exponential backoff
     return None
 
-
 def fetch_product_data_praktis(code):
+    code = str(code).strip()  # Ensure the code is a string and strip leading/trailing whitespace
     url = PRAKTIS_SEARCH_URL.format(code)
     soup = get_soup(url)
     if not soup:
@@ -48,7 +50,6 @@ def fetch_product_data_praktis(code):
         "regular_price": regular_price.text.strip().replace("\u043b\u0432.", "").strip() if regular_price else "N/A",
         "promo_price": promo_price.text.strip().replace("\u043b\u0432.", "").strip() if promo_price else None,
     }
-
 
 def fetch_product_data_praktiker(code):
     code = str(code).strip()  # Ensure the code is a string and strip leading/trailing whitespace
@@ -93,49 +94,82 @@ def fetch_product_data_praktiker(code):
         "promo_price": promo_price,
     }
 
+def adjust_excel_formatting(file_path):
+    workbook = load_workbook(file_path)
+    sheet = workbook.active
+
+    for col in sheet.columns:
+        max_length = 0
+        col_letter = get_column_letter(col[0].column)
+        for cell in col:
+            try:
+                if cell.value:
+                    max_length = max(max_length, len(str(cell.value)))
+                cell.alignment = Alignment(wrap_text=True)
+            except:
+                pass
+        adjusted_width = max_length + 2
+        sheet.column_dimensions[col_letter].width = adjusted_width
+
+    workbook.save(file_path)
+    workbook.close()
 
 def process_excel_and_fetch_data(input_file, output_file):
     try:
-        df = pd.read_excel(input_file, engine="odf")
-        praktis_codes = df.iloc[:, 0]
-        praktiker_codes = df.iloc[:, 1]
+        # Start the timer
+        start_time = time.time()
 
-        delay_range = (0.5, 2.0)  # Delay between requests
+        df = pd.read_excel(input_file, engine="odf")
+        praktis_codes = df.iloc[:, 0].tolist()
+        praktiker_codes = df.iloc[:, 1].tolist()
+
+        delay_range = (1.0, 2.0)  # Delay between requests
         max_threads = 5  # Limit concurrent threads to avoid server overload
 
-        praktis_data = []
-        praktiker_data = []
+        praktis_data = {code: None for code in praktis_codes}
 
-        # Fetch Praktis data
         with ThreadPoolExecutor(max_threads) as executor:
             futures_praktis = {executor.submit(fetch_product_data_praktis, code): code for code in praktis_codes}
             for future in as_completed(futures_praktis):
-                praktis_data.append(future.result())
+                code = futures_praktis[future]
+                praktis_data[code] = future.result()
                 time.sleep(random.uniform(*delay_range))
 
-        # Fetch Praktiker data
+        praktis_data = [praktis_data[code] for code in praktis_codes]
+
+        praktiker_data = []
         with ThreadPoolExecutor(max_threads) as executor:
             futures_praktiker = {executor.submit(fetch_product_data_praktiker, code): code for code in praktiker_codes}
             for future in as_completed(futures_praktiker):
                 praktiker_data.append(future.result())
                 time.sleep(random.uniform(*delay_range))
 
-        # Combine and export to Excel
         output_df = pd.DataFrame({
-            "ID": [item["code"] for item in praktis_data],
-            "Name": [item["name"] for item in praktis_data],
-            "Praktis Regular": [item["regular_price"] for item in praktis_data],
-            "Praktiker Regular": [item["regular_price"] for item in praktiker_data],
-            "Praktis Promo": [item["promo_price"] for item in praktis_data],
-            "Praktiker Promo": [item["promo_price"] for item in praktiker_data],
+            "Praktis Code": praktis_codes,
+            "Praktiker Code": praktiker_codes,
+            "Praktis Name": [item["name"] for item in praktis_data],
+            "Praktiker Name": [item["name"] for item in praktiker_data],
+            "Praktis Regular Price": [item["regular_price"] for item in praktis_data],
+            "Praktiker Regular Price": [item["regular_price"] for item in praktiker_data],
+            "Praktis Promo Price": [item["promo_price"] for item in praktis_data],
+            "Praktiker Promo Price": [item["promo_price"] for item in praktiker_data],
         })
+
         output_df.to_excel(output_file, index=False)
+        adjust_excel_formatting(output_file)
+
+        # Stop the timer and calculate elapsed time
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+
         print(f"Data exported successfully to {output_file}")
+        print(f"Execution time: {elapsed_time:.2f} seconds")
+
     except Exception as e:
         print(f"An error occurred: {e}")
 
-
 if __name__ == "__main__":
-    input_excel = r"C:\Users\МЕГАДОМ\Desktop\products_list.ods"
-    output_excel = r"C:\Users\МЕГАДОМ\Desktop\product_details_1.xlsx"
+    input_excel = r"C:\Users\МЕГАДОМ\Desktop\products_list - Copy.ods"
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    output_excel = rf"C:\Users\МЕГАДОМ\Desktop\product_details_{timestamp}.xlsx"
     process_excel_and_fetch_data(input_excel, output_excel)
