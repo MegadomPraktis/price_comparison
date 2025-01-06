@@ -1,3 +1,9 @@
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
+import os
 import time
 import random
 import pandas as pd
@@ -21,6 +27,35 @@ USER_AGENTS = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
 ]
 session.headers.update({"Accept-Language": "en-US,en;q=0.9"})
+
+
+def send_email(smtp_server, port, sender_email, sender_password, recipient_emails, subject, body, attachment_path):
+    try:
+        # Create email message
+        msg = MIMEMultipart()
+        msg['From'] = sender_email
+        msg['To'] = ", ".join(recipient_emails)  # Join multiple recipients with a comma
+        msg['Subject'] = subject
+
+        # Attach email body
+        msg.attach(MIMEText(body, 'plain'))
+
+        # Attach the file
+        with open(attachment_path, "rb") as attachment:
+            part = MIMEBase('application', 'octet-stream')
+            part.set_payload(attachment.read())
+        encoders.encode_base64(part)
+        part.add_header('Content-Disposition', f'attachment; filename="{os.path.basename(attachment_path)}"')
+        msg.attach(part)
+
+        # Connect to the SMTP server using implicit SSL/TLS
+        with smtplib.SMTP_SSL(smtp_server, port) as server:
+            server.login(sender_email, sender_password)
+            server.send_message(msg)
+
+        print("Email sent successfully to:", ", ".join(recipient_emails))
+    except Exception as e:
+        print(f"Failed to send email: {e}")
 
 def get_soup(url):
     for attempt in range(3):  # Retry up to 3 times
@@ -169,7 +204,21 @@ def process_excel_and_fetch_data(input_file, output_file):
         print(f"An error occurred: {e}")
 
 if __name__ == "__main__":
-    input_excel = r"C:\Users\МЕГАДОМ\Desktop\products_list - Copy.ods"
+    input_excel = r"C:\Users\МЕГАДОМ\Desktop\products_list.ods"
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    output_excel = rf"C:\Users\МЕГАДОМ\Desktop\product_details_{timestamp}.xlsx"
+    output_excel = rf"C:\Users\МЕГАДОМ\\product_details_{timestamp}.xlsx"
     process_excel_and_fetch_data(input_excel, output_excel)
+
+
+# Email configuration
+    smtp_server = "mail.praktis.bg"  # Your SMTP server
+    port = 465
+    sender_email = "a.borisov@praktis.bg"
+    sender_password = "**prkts11##"
+    recipient_emails = ["aso_993@abv.bg", "angel_bborisov@abv.bg", "angelborisov3@gmail.com"]
+    subject = "Product Details Report"
+    body = f"Hi,\n\nPlease find attached the product details report generated on {timestamp}.\n\nBest regards,\nYour Script"
+    attachment_path = output_excel
+
+    # Send the email
+    send_email(smtp_server, port, sender_email, sender_password, recipient_emails, subject, body, attachment_path)
