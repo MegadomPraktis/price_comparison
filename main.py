@@ -60,7 +60,7 @@ def get_soup(url):
     for attempt in range(3):  # Retry up to 3 times
         try:
             session.headers.update({"User-Agent": random.choice(USER_AGENTS)})
-            response = session.get(url, timeout=15)
+            response = session.get(url, timeout=16)
             response.raise_for_status()
             return BeautifulSoup(response.content, 'html.parser')
         except requests.RequestException:
