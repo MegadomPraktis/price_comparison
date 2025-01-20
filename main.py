@@ -28,7 +28,6 @@ USER_AGENTS = [
 ]
 session.headers.update({"Accept-Language": "en-US,en;q=0.9"})
 
-
 def send_email(smtp_server, port, sender_email, sender_password, recipient_emails, subject, body, attachment_path):
     try:
         # Create email message
@@ -69,7 +68,7 @@ def get_soup(url):
     return None
 
 def fetch_product_data_praktis(code):
-    code = str(code).strip()  # Ensure the code is a string and strip leading/trailing whitespace
+    code = str(code).strip()
     url = PRAKTIS_SEARCH_URL.format(code)
     soup = get_soup(url)
     if not soup:
@@ -87,16 +86,16 @@ def fetch_product_data_praktis(code):
     }
 
 def fetch_product_data_praktiker(code):
-    code = str(code).strip()  # Ensure the code is a string and strip leading/trailing whitespace
+    code = str(code).strip()
     url = PRAKTIKER_SEARCH_URL.format(code)
     soup = get_soup(url)
     if not soup:
-        return {"code": code, "name": "N/A", "regular_price": "N/A", "promo_price": None}
+        return {"code": code, "name": "N/A", "regular_price": None, "promo_price": None}
 
     name_element = soup.select_one("h2.product-item__title a")
     name = name_element.text.strip() if name_element else "N/A"
 
-    regular_price = "N/A"
+    regular_price = None
     promo_price = None
 
     old_price_element = soup.select_one("span.product-price--old .product-price__value")
@@ -141,8 +140,8 @@ def adjust_excel_formatting(file_path):
                 if cell.value:
                     max_length = max(max_length, len(str(cell.value)))
                 cell.alignment = Alignment(wrap_text=True)
-            except:
-                pass
+            except Exception as e:
+                print(f"Error adjusting column {col_letter}: {e}")
         adjusted_width = max_length + 2
         sheet.column_dimensions[col_letter].width = adjusted_width
 
@@ -151,74 +150,56 @@ def adjust_excel_formatting(file_path):
 
 def process_excel_and_fetch_data(input_file, output_file):
     try:
-        # Start the timer
         start_time = time.time()
 
         df = pd.read_excel(input_file, engine="odf")
-        praktis_codes = df.iloc[:, 0].tolist()
-        praktiker_codes = df.iloc[:, 1].tolist()
+        pairs = df.values.tolist()
 
-        delay_range = (1.0, 2.0)  # Delay between requests
-        max_threads = 5  # Limit concurrent threads to avoid server overload
+        results = []
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = {
+                executor.submit(fetch_product_data_praktis, pair[0]): pair for pair in pairs
+            }
 
-        praktis_data = {code: None for code in praktis_codes}
+            for future in as_completed(futures):
+                pair = futures[future]
+                praktis_data = future.result()
+                praktiker_data = fetch_product_data_praktiker(pair[1])
+                results.append({
+                    "Praktis Code": pair[0],
+                    "Praktiker Code": pair[1],
+                    "Praktis Name": praktis_data["name"],
+                    "Praktiker Name": praktiker_data["name"],
+                    "Praktis Regular Price": praktis_data["regular_price"],
+                    "Praktiker Regular Price": praktiker_data["regular_price"],
+                    "Praktis Promo Price": praktis_data["promo_price"],
+                    "Praktiker Promo Price": praktiker_data["promo_price"],
+                })
 
-        with ThreadPoolExecutor(max_threads) as executor:
-            futures_praktis = {executor.submit(fetch_product_data_praktis, code): code for code in praktis_codes}
-            for future in as_completed(futures_praktis):
-                code = futures_praktis[future]
-                praktis_data[code] = future.result()
-                time.sleep(random.uniform(*delay_range))
-
-        praktis_data = [praktis_data[code] for code in praktis_codes]
-
-        praktiker_data = []
-        with ThreadPoolExecutor(max_threads) as executor:
-            futures_praktiker = {executor.submit(fetch_product_data_praktiker, code): code for code in praktiker_codes}
-            for future in as_completed(futures_praktiker):
-                praktiker_data.append(future.result())
-                time.sleep(random.uniform(*delay_range))
-
-        output_df = pd.DataFrame({
-            "Praktis Code": praktis_codes,
-            "Praktiker Code": praktiker_codes,
-            "Praktis Name": [item["name"] for item in praktis_data],
-            "Praktiker Name": [item["name"] for item in praktiker_data],
-            "Praktis Regular Price": [item["regular_price"] for item in praktis_data],
-            "Praktiker Regular Price": [item["regular_price"] for item in praktiker_data],
-            "Praktis Promo Price": [item["promo_price"] for item in praktis_data],
-            "Praktiker Promo Price": [item["promo_price"] for item in praktiker_data],
-        })
-
+        output_df = pd.DataFrame(results)
         output_df.to_excel(output_file, index=False)
         adjust_excel_formatting(output_file)
 
-        # Stop the timer and calculate elapsed time
         end_time = time.time()
-        elapsed_time = end_time - start_time
-
         print(f"Data exported successfully to {output_file}")
-        print(f"Execution time: {elapsed_time:.2f} seconds")
+        print(f"Execution time: {end_time - start_time:.2f} seconds")
 
     except Exception as e:
         print(f"An error occurred: {e}")
 
 if __name__ == "__main__":
-    input_excel = r"C:\Users\МЕГАДОМ\Desktop\products_list.ods"
+    input_excel = r"C:\\Users\\МЕГАДОМ\\Desktop\\product_list_test.ods"
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    output_excel = rf"C:\Users\МЕГАДОМ\\product_details_{timestamp}.xlsx"
+    output_excel = rf"C:\\Users\\МЕГАДОМ\\product_details_{timestamp}.xlsx"
     process_excel_and_fetch_data(input_excel, output_excel)
 
-
-# Email configuration
-    smtp_server = "mail.praktis.bg"  # Your SMTP server
+    smtp_server = "mail.praktis.bg"
     port = 465
     sender_email = "a.borisov@praktis.bg"
     sender_password = "**prkts11##"
-    recipient_emails = ["aso_993@abv.bg", "angel_bborisov@abv.bg", "angelborisov3@gmail.com"]
+    recipient_emails = ["angel_bborisov@abv.bg"]
     subject = "Product Details Report"
     body = f"Hi,\n\nPlease find attached the product details report generated on {timestamp}.\n\nBest regards,\nYour Script"
     attachment_path = output_excel
 
-    # Send the email
     send_email(smtp_server, port, sender_email, sender_password, recipient_emails, subject, body, attachment_path)
