@@ -10,9 +10,11 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Alignment
+from xlsxwriter.utility import xl_rowcol_to_cell
+from openpyxl.styles import Font, PatternFill
 from datetime import datetime
 
 # Constants for search URLs
@@ -60,7 +62,7 @@ def get_soup(url):
     for attempt in range(3):  # Retry up to 3 times
         try:
             session.headers.update({"User-Agent": random.choice(USER_AGENTS)})
-            response = session.get(url, timeout=17)
+            response = session.get(url, timeout=16)
             response.raise_for_status()
             return BeautifulSoup(response.content, 'html.parser')
         except requests.RequestException:
@@ -72,7 +74,7 @@ def fetch_product_data_praktis(code):
     url = PRAKTIS_SEARCH_URL.format(code)
     soup = get_soup(url)
     if not soup:
-        return {"code": code, "name": "N/A", "regular_price": "N/A", "promo_price": "N/A"}
+        return {"code": code, "name": "N/A", "url": url, "regular_price": "N/A", "promo_price": "N/A"}
 
     name = soup.select_one("p.product-name.h4")
     regular_price = soup.select_one("span.price.striked, div.old-price span.price") or soup.select_one("span.price")
@@ -81,6 +83,7 @@ def fetch_product_data_praktis(code):
     return {
         "code": code,
         "name": name.text.strip() if name else "N/A",
+        "url": url,
         "regular_price": regular_price.text.strip().replace("\u043b\u0432.", "").strip() if regular_price else "N/A",
         "promo_price": promo_price.text.strip().replace("\u043b\u0432.", "").strip() if promo_price else None,
     }
@@ -90,7 +93,7 @@ def fetch_product_data_praktiker(code):
     url = PRAKTIKER_SEARCH_URL.format(code)
     soup = get_soup(url)
     if not soup:
-        return {"code": code, "name": "N/A", "regular_price": None, "promo_price": None}
+        return {"code": code, "name": "N/A", "url": url, "regular_price": None, "promo_price": None}
 
     name_element = soup.select_one("h2.product-item__title a")
     name = name_element.text.strip() if name_element else "N/A"
@@ -124,6 +127,7 @@ def fetch_product_data_praktiker(code):
     return {
         "code": code,
         "name": name,
+        "url": url,
         "regular_price": regular_price,
         "promo_price": promo_price,
     }
@@ -176,9 +180,34 @@ def process_excel_and_fetch_data(input_file, output_file):
                     "Praktiker Promo Price": praktiker_data["promo_price"],
                 })
 
-        output_df = pd.DataFrame(results)
-        output_df.to_excel(output_file, index=False)
-        adjust_excel_formatting(output_file)
+        # Write to Excel with xlsxwriter
+        with pd.ExcelWriter(output_file, engine="xlsxwriter") as writer:
+            output_df = pd.DataFrame(results)
+            output_df.to_excel(writer, index=False, sheet_name="Product Details")
+
+            workbook = writer.book
+            worksheet = writer.sheets["Product Details"]
+
+            # Add hyperlinks in the Praktis Name and Praktiker Name columns
+            for row_num, row_data in enumerate(results, start=1):
+                if row_data["Praktis Name"]:
+                    praktis_url = PRAKTIS_SEARCH_URL.format(row_data["Praktis Code"])
+                    worksheet.write_url(
+                        row_num, 2, praktis_url, string=row_data["Praktis Name"]
+                    )
+                if row_data["Praktiker Name"]:
+                    praktiker_url = PRAKTIKER_SEARCH_URL.format(row_data["Praktiker Code"])
+                    worksheet.write_url(
+                        row_num, 3, praktiker_url, string=row_data["Praktiker Name"]
+                    )
+
+            # Adjust column widths and enable text wrapping
+            for col_num, column in enumerate(output_df.columns):
+                max_length = max(output_df[column].astype(str).map(len).max(), len(column)) + 2
+                worksheet.set_column(col_num, col_num, max_length)
+
+            for row_num in range(1, len(results) + 2):
+                worksheet.set_row(row_num, 20, workbook.add_format({'text_wrap': True}))
 
         end_time = time.time()
         print(f"Data exported successfully to {output_file}")
@@ -186,6 +215,7 @@ def process_excel_and_fetch_data(input_file, output_file):
 
     except Exception as e:
         print(f"An error occurred: {e}")
+
 
 if __name__ == "__main__":
     input_excel = r"C:\\Users\\МЕГАДОМ\\Desktop\\product_list_test.ods"
